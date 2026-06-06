@@ -2,7 +2,8 @@
 
 A live 2D/3D force-directed graph of your entire Home Assistant setup — floors, areas, devices, and entities — built automatically from your HA registries with no hardcoded data.
 
-![screenshot placeholder](screenshot.png)
+![2D view](screenshot-2d.png)
+![3D view](screenshot-3d.png)
 
 ## Features
 
