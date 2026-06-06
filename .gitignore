@@ -1,0 +1,12 @@
+# Local library files (download instructions in README)
+d3.min.js
+three.min.js
+3d-force-graph.min.js
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+*.swp

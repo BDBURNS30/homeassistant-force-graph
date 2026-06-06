@@ -1,0 +1,1132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HA Entity Graph</title>
+
+<!--
+  CDN dependencies (recommended for most users).
+  To run offline / on a local network without internet access, download these
+  three files into the same folder as index.html and replace the src values:
+    https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js
+    https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.min.js
+    https://cdn.jsdelivr.net/npm/3d-force-graph@1/dist/3d-force-graph.min.js
+  Then change the three <script src="..."> lines below to local filenames, e.g.:
+    <script src="d3.min.js"></script>
+-->
+<script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/3d-force-graph@1/dist/3d-force-graph.min.js"></script>
+
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --accent: #58a6ff;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; overflow: hidden; height: 100vh; }
+
+  #app { display: flex; flex-direction: column; height: 100vh; }
+
+  /* ── Header ── */
+  #header {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 16px; background: var(--surface);
+    border-bottom: 1px solid var(--border); flex-shrink: 0; z-index: 10;
+  }
+  #header h1 { font-size: 15px; font-weight: 600; color: var(--text); }
+  #header .badge {
+    font-size: 11px; padding: 2px 8px; border-radius: 20px;
+    background: #21262d; color: var(--muted); border: 1px solid var(--border);
+  }
+  #live-dot {
+    width: 8px; height: 8px; border-radius: 50%; background: #3d444d;
+    transition: background 0.3s; margin-left: auto;
+  }
+  #live-dot.live { background: #3fb950; box-shadow: 0 0 6px #3fb950; }
+
+  /* ── View toggle ── */
+  #view-toggle {
+    display: flex; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 6px; overflow: hidden;
+  }
+  #view-toggle button {
+    padding: 5px 14px; font-size: 12px; font-weight: 500;
+    border: none; background: transparent; color: var(--muted); cursor: pointer;
+    transition: all 0.15s;
+  }
+  #view-toggle button.active { background: var(--accent); color: #fff; }
+
+  /* ── Filters ── */
+  #filters {
+    display: flex; gap: 6px; flex-wrap: wrap;
+    padding: 8px 16px; background: var(--surface);
+    border-bottom: 1px solid var(--border); flex-shrink: 0;
+  }
+  .filter-chip {
+    display: flex; align-items: center; gap: 5px;
+    padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 500;
+    border: 1px solid transparent; cursor: pointer; transition: all 0.15s; user-select: none;
+  }
+  .filter-chip .dot { width: 7px; height: 7px; border-radius: 50%; }
+  .filter-chip.off { opacity: 0.35; }
+  #search-wrap { margin-left: auto; }
+  #search {
+    background: var(--bg); border: 1px solid var(--border); color: var(--text);
+    padding: 4px 10px; border-radius: 6px; font-size: 12px; width: 180px;
+  }
+  #search:focus { outline: none; border-color: var(--accent); }
+
+  /* ── Canvas area ── */
+  #canvas-area { flex: 1; position: relative; overflow: hidden; }
+  #graph-2d, #graph-3d { position: absolute; inset: 0; }
+  #graph-3d { display: none; }
+
+  /* ── Tooltip ── */
+  #tooltip {
+    position: absolute; pointer-events: none;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 10px 14px; font-size: 12px;
+    max-width: 280px; box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+    display: none; z-index: 100; line-height: 1.5;
+  }
+  #tooltip .tt-title { font-weight: 600; font-size: 13px; margin-bottom: 4px; }
+  #tooltip .tt-row { color: var(--muted); }
+  #tooltip .tt-row span { color: var(--text); }
+  #tooltip .tt-state { margin-top: 6px; padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+
+  /* ── Side panel ── */
+  #side-panel {
+    position: absolute; right: 0; top: 0; bottom: 0; width: 280px;
+    background: var(--surface); border-left: 1px solid var(--border);
+    padding: 16px; overflow-y: auto; transform: translateX(100%);
+    transition: transform 0.2s ease; z-index: 50;
+  }
+  #side-panel.open { transform: translateX(0); }
+  #side-panel h3 { font-size: 14px; margin-bottom: 12px; }
+  #side-panel .close-btn {
+    position: absolute; top: 12px; right: 12px;
+    background: none; border: none; color: var(--muted); cursor: pointer; font-size: 18px;
+  }
+  .detail-row { margin-bottom: 8px; }
+  .detail-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+  .detail-val { font-size: 13px; margin-top: 2px; }
+  .connected-list { margin-top: 12px; }
+  .connected-list h4 { font-size: 11px; color: var(--muted); text-transform: uppercase; margin-bottom: 6px; }
+  .ctrl-btn {
+    background: #2a2a3a; border: 1px solid #444; color: #ccc;
+    border-radius: 4px; padding: 4px 10px; font-size: 12px; cursor: pointer;
+  }
+  .ctrl-btn:hover { border-color: var(--accent); color: #fff; }
+  .ctrl-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .conn-item {
+    font-size: 12px; padding: 4px 8px; border-radius: 4px;
+    background: var(--bg); margin-bottom: 3px; cursor: pointer;
+    border: 1px solid var(--border);
+  }
+  .conn-item:hover { border-color: var(--accent); }
+
+  /* ── Legend ── */
+  #legend {
+    position: absolute; bottom: 12px; left: 12px;
+    background: rgba(22,27,34,0.85); border: 1px solid var(--border);
+    border-radius: 8px; padding: 10px 14px; font-size: 11px;
+    backdrop-filter: blur(4px); pointer-events: none;
+  }
+  #legend .leg-row { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+  #legend .leg-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+  #legend .leg-line {
+    width: 20px; height: 2px; border-radius: 1px; flex-shrink: 0;
+  }
+
+  /* ── Stats ── */
+  #stats {
+    position: absolute; bottom: 12px; right: 12px;
+    background: rgba(22,27,34,0.85); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 12px; font-size: 11px; color: var(--muted);
+    backdrop-filter: blur(4px); pointer-events: none;
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="header">
+    <h1 id="graph-title">HA Entity Graph</h1>
+    <span class="badge" id="node-count">— nodes</span>
+    <span class="badge" id="edge-count">— edges</span>
+    <div id="view-toggle">
+      <button id="btn-2d" class="active" onclick="switchView('2d')">2D</button>
+      <button id="btn-3d" onclick="switchView('3d')">3D</button>
+    </div>
+    <div id="live-dot" title="WebSocket live updates"></div>
+  </div>
+
+  <div id="filters">
+    <!-- chips injected by JS -->
+    <div id="search-wrap"><input id="search" type="text" placeholder="Search nodes…" oninput="filterBySearch(this.value)"></div>
+  </div>
+
+  <div id="canvas-area">
+    <svg id="graph-2d"></svg>
+    <div id="graph-3d"></div>
+    <div id="tooltip"></div>
+    <div id="side-panel">
+      <button class="close-btn" onclick="closePanel()">×</button>
+      <h3 id="panel-title">Node Detail</h3>
+      <div id="panel-content"></div>
+    </div>
+    <div id="legend"></div>
+    <div id="stats"></div>
+    <div id="loading-overlay" style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:var(--bg);z-index:200">
+      <div style="font-size:15px;color:var(--muted);margin-bottom:8px">Loading HA registries…</div>
+      <div id="loading-detail" style="font-size:11px;color:#444">Connecting to WebSocket</div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════════
+//  CONFIG — edit these two values before opening the page
+// ═══════════════════════════════════════════════════════════
+//
+//  HA_URL:   Full URL to your Home Assistant instance.
+//            Use http:// (not https://) unless you have a valid certificate.
+//            Examples:
+//              "http://homeassistant.local:8123"
+//              "http://192.168.1.100:8123"
+//
+//  HA_TOKEN: A Long-Lived Access Token from your HA profile.
+//            In HA: Profile (bottom-left) → Security → Long-Lived Access Tokens → Create Token
+//
+const HA_URL   = "http://YOUR_HA_IP:8123";
+const HA_TOKEN = "YOUR_LONG_LIVED_ACCESS_TOKEN";
+
+// Domain metadata: color, icon, category
+const DOMAIN_META = {
+  light:          { color: "#f0c040", icon: "💡", cat: "Device" },
+  switch:         { color: "#4fc3f7", icon: "🔌", cat: "Device" },
+  binary_sensor:  { color: "#81c784", icon: "👁", cat: "Sensor" },
+  sensor:         { color: "#a5d6a7", icon: "📊", cat: "Sensor" },
+  climate:        { color: "#ff8a65", icon: "🌡", cat: "Device" },
+  media_player:   { color: "#ce93d8", icon: "📺", cat: "Device" },
+  automation:     { color: "#ef5350", icon: "⚡", cat: "Logic" },
+  scene:          { color: "#ff7043", icon: "🎬", cat: "Logic" },
+  script:         { color: "#f48fb1", icon: "📜", cat: "Logic" },
+  event:          { color: "#80cbc4", icon: "🔔", cat: "Device" },
+  device_tracker: { color: "#90a4ae", icon: "📍", cat: "Device" },
+  notify:         { color: "#b39ddb", icon: "📢", cat: "Device" },
+  number:         { color: "#ffcc80", icon: "🔢", cat: "Config" },
+  select:         { color: "#ffcc80", icon: "📋", cat: "Config" },
+  button:         { color: "#78909c", icon: "🔘", cat: "Config" },
+  update:         { color: "#80deea", icon: "⬆", cat: "Config" },
+  input_boolean:  { color: "#aed581", icon: "☑", cat: "Helper" },
+  input_number:   { color: "#fff176", icon: "🔢", cat: "Helper" },
+  device:         { color: "#546e7a", icon: "📦", cat: "Device" },
+  ha:             { color: "#18bcf2", icon: "🏠", cat: "Structure" },
+  residence:      { color: "#7e57c2", icon: "🏡", cat: "Structure" },
+  floor:          { color: "#5c6bc0", icon: "▦",  cat: "Structure" },
+  area:           { color: "#26a69a", icon: "📍", cat: "Structure" },
+  outdoor:        { color: "#66bb6a", icon: "🌿", cat: "Structure" },
+};
+
+function domainMeta(domain) {
+  return DOMAIN_META[domain] || { color: "#8b949e", icon: "●", cat: "Other" };
+}
+
+// ══════════════════════════════════════════════════════════
+//  DYNAMIC GRAPH DATA  (populated from HA registries via WS)
+// ══════════════════════════════════════════════════════════
+let graphNodes = [];
+let graphEdges = [];
+
+// Domains to include as entity nodes
+const SHOW_DOMAINS = new Set([
+  'light','switch','climate','binary_sensor','sensor','media_player',
+  'fan','cover','lock','alarm_control_panel','input_boolean','automation',
+  'scene','script','notify','event','device_tracker','remote','vacuum'
+]);
+// Domains to always hide (config noise)
+const HIDE_DOMAINS = new Set([
+  'number','select','update','button','text','image','camera','tts',
+  'stt','wake_word','tag','persistent_notification','conversation',
+  'assist_satellite','todo','schedule','weather','zone'
+]);
+
+function humanize(entityId) {
+  const name = entityId.includes('.') ? entityId.split('.')[1] : entityId;
+  return name.replace(/_/g,' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+// Recursively extract entity_id strings from automation/scene/script config objects
+function extractEntityIds(obj, ids = new Set()) {
+  if (!obj || typeof obj !== 'object') return ids;
+  if (Array.isArray(obj)) { obj.forEach(v => extractEntityIds(v, ids)); return ids; }
+  for (const [k, v] of Object.entries(obj)) {
+    if (k === 'entity_id' || k === 'entity') {
+      (Array.isArray(v) ? v : [v]).forEach(id => {
+        if (typeof id === 'string' && /^[a-z_]+\.[a-z0-9_]+$/.test(id)) ids.add(id);
+      });
+    } else if (!['metadata','last_triggered','context','id','alias','description','mode','max'].includes(k)) {
+      extractEntityIds(v, ids);
+    }
+  }
+  return ids;
+}
+
+function buildGraphFromRegistries(reg) {
+  const { states, floors, areas, devices, entities, automations, scenes, scripts } = reg;
+
+  // Index live states
+  (states || []).forEach(s => { liveStates[s.entity_id] = s; });
+
+  const nodes = [];
+  const edges = [];
+  const areaMap  = {};  // area_id  → area object
+  const deviceMap = {}; // device_id → device object
+  const nodeIdSet = new Set(); // all node ids in graph
+
+  // Helper to add a node only once
+  function addNode(n) { if (!nodeIdSet.has(n.id)) { nodeIdSet.add(n.id); nodes.push(n); } }
+  function addEdge(s, t, type) {
+    if (nodeIdSet.has(s) && nodeIdSet.has(t)) edges.push({ s, t, type });
+  }
+
+  // ── HA root ──
+  addNode({ id: "node_ha", label: "Home Assistant", type: "structure", domain: "ha", r_override: 18 });
+
+  // ── Floors ──
+  (floors || []).sort((a,b) => (a.level||0)-(b.level||0)).forEach(f => {
+    const nid = `fl_${f.floor_id}`;
+    addNode({ id: nid, label: f.name, type: "structure", domain: "floor", r_override: 12 });
+    edges.push({ s: "node_ha", t: nid, type: "structure" });
+  });
+
+  // ── Areas ──
+  (areas || []).forEach(a => {
+    areaMap[a.area_id] = a;
+    const nid = `ar_${a.area_id}`;
+    addNode({ id: nid, label: a.name, type: "structure", domain: "area", r_override: 11 });
+    const parent = a.floor_id ? `fl_${a.floor_id}` : "node_ha";
+    edges.push({ s: parent, t: nid, type: "structure" });
+  });
+
+  // ── Devices ──
+  (devices || []).forEach(d => {
+    deviceMap[d.id] = d;
+    const name = d.name_by_user || d.name || ("Device " + d.id.slice(0,6));
+    const nid = `dev_${d.id}`;
+    addNode({ id: nid, label: name, type: "device", domain: "device", ha_device_id: d.id });
+    const parent = d.area_id ? `ar_${d.area_id}` : "node_ha";
+    edges.push({ s: parent, t: nid, type: "area" });
+  });
+
+  // ── Entities ──
+  // Build unique_id → entity_id map (needed to link automation configs)
+  const uniqueToEntityId = {};
+  (entities || []).forEach(e => { if (e.unique_id) uniqueToEntityId[e.unique_id] = e.entity_id; });
+
+  (entities || []).forEach(e => {
+    const domain = e.entity_id.split('.')[0];
+    if (HIDE_DOMAINS.has(domain)) return;
+    if (!SHOW_DOMAINS.has(domain)) return;
+    if (e.disabled_by) return;
+
+    const stateObj = liveStates[e.entity_id];
+    const label = e.name || stateObj?.attributes?.friendly_name || humanize(e.entity_id);
+    addNode({ id: e.entity_id, label, type: "entity", domain });
+
+    if (e.device_id && deviceMap[e.device_id]) {
+      edges.push({ s: `dev_${e.device_id}`, t: e.entity_id, type: "belongs" });
+    } else if (e.area_id && areaMap[e.area_id]) {
+      edges.push({ s: `ar_${e.area_id}`, t: e.entity_id, type: "area" });
+    }
+    // orphan entities (no device, no area) have no parent edge — they float
+  });
+
+  // ── Automation → entity edges ──
+  (automations || []).forEach(auto => {
+    const entityId = uniqueToEntityId[auto.id];
+    if (!entityId || !nodeIdSet.has(entityId)) return;
+    const related = extractEntityIds({
+      trigger: auto.trigger || auto.triggers,
+      action:  auto.action  || auto.actions
+    });
+    related.forEach(eid => {
+      if (nodeIdSet.has(eid) && eid !== entityId)
+        edges.push({ s: entityId, t: eid, type: "related" });
+    });
+  });
+
+  // ── Scene → entity edges ──
+  (scenes || []).forEach(scene => {
+    // Try unique_id match first, fall back to name slug
+    let entityId = uniqueToEntityId[scene.id];
+    if (!entityId) {
+      const slug = (scene.name||"").toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_|_$/g,'');
+      entityId = `scene.${slug}`;
+    }
+    if (!nodeIdSet.has(entityId)) return;
+    Object.keys(scene.entities || {}).forEach(eid => {
+      if (nodeIdSet.has(eid)) edges.push({ s: entityId, t: eid, type: "related" });
+    });
+  });
+
+  // ── Script → entity edges ──
+  // config/script/list returns { script_alias_slug: { alias, sequence, ... } }
+  if (scripts && typeof scripts === 'object' && !Array.isArray(scripts)) {
+    Object.entries(scripts).forEach(([slug, data]) => {
+      const entityId = `script.${slug}`;
+      if (!nodeIdSet.has(entityId)) return;
+      const related = extractEntityIds({ sequence: data.sequence });
+      related.forEach(eid => {
+        if (nodeIdSet.has(eid) && eid !== entityId)
+          edges.push({ s: entityId, t: eid, type: "related" });
+      });
+    });
+  }
+
+  graphNodes = nodes;
+  graphEdges = edges;
+  return { nodes, edges };
+}
+
+// ══════════════════════════════════════════════════════════
+//  STATE + WS  (registry load on auth, live updates via events)
+// ══════════════════════════════════════════════════════════
+let liveStates  = {};
+let wsConnected = false;
+let _ws     = null;
+let _msgId  = 1;
+
+// Registry fetch tracking
+const REG_KEYS   = ['states','floors','areas','devices','entities','automations','scenes','scripts'];
+const _regPending = {};  // msgId → key
+const _regData    = {};  // key → result
+let   _regRemaining = 0;
+
+// Debounced graph update (avoids re-rendering on every edge addition)
+let _updateTimer = null;
+function scheduleGraphUpdate() {
+  clearTimeout(_updateTimer);
+  _updateTimer = setTimeout(() => {
+    if (currentView === "2d") update2D();
+    if (currentView === "3d" && graph3d) {
+      const { nodes, links } = buildGraphData();
+      graph3d.graphData({ nodes, links });
+    }
+    updateStats();
+  }, 400);
+}
+
+function callService(domain, service, entityId, extraData) {
+  if (!_ws || _ws.readyState !== WebSocket.OPEN) { console.warn("WS not ready"); return; }
+  const id = _msgId++;
+  _ws.send(JSON.stringify({ id, type: "call_service", domain, service,
+                             service_data: { entity_id: entityId, ...extraData } }));
+}
+
+function setLoadingDetail(text) {
+  const el = document.getElementById("loading-detail");
+  if (el) el.textContent = text;
+}
+
+function connectWS() {
+  const wsUrl = HA_URL.replace(/^http/, 'ws') + '/api/websocket';
+  const ws = new WebSocket(wsUrl);
+  _ws = ws;
+
+  ws.onopen = () => {
+    document.getElementById("live-dot").classList.add("live");
+    wsConnected = true;
+    setLoadingDetail("Authenticating…");
+  };
+  ws.onclose = () => {
+    document.getElementById("live-dot").classList.remove("live");
+    wsConnected = false;
+    _ws = null;
+    setTimeout(connectWS, 5000);
+  };
+  ws.onmessage = (ev) => {
+    const msg = JSON.parse(ev.data);
+
+    if (msg.type === "auth_required") {
+      ws.send(JSON.stringify({ type: "auth", access_token: HA_TOKEN }));
+
+    } else if (msg.type === "auth_ok") {
+      setLoadingDetail("Loading registries…");
+      // Request all registry data in parallel
+      const requests = [
+        { key: "states",      type: "get_states" },
+        { key: "floors",      type: "config/floor_registry/list" },
+        { key: "areas",       type: "config/area_registry/list" },
+        { key: "devices",     type: "config/device_registry/list" },
+        { key: "entities",    type: "config/entity_registry/list" },
+        { key: "automations", type: "config/automation/list" },
+        { key: "scenes",      type: "config/scene/list" },
+        { key: "scripts",     type: "config/script/list" },
+      ];
+      _regRemaining = requests.length;
+      requests.forEach(r => {
+        const id = _msgId++;
+        _regPending[id] = r.key;
+        ws.send(JSON.stringify({ id, type: r.type }));
+      });
+      // Subscribe to live state changes
+      ws.send(JSON.stringify({ id: _msgId++, type: "subscribe_events", event_type: "state_changed" }));
+
+    } else if (msg.type === "result" && _regPending[msg.id] !== undefined) {
+      const key = _regPending[msg.id];
+      delete _regPending[msg.id];
+      _regData[key] = msg.success ? msg.result : (key === 'scripts' ? {} : []);
+      _regRemaining--;
+      setLoadingDetail(`Loaded: ${Object.keys(_regData).join(', ')}`);
+
+      if (_regRemaining === 0) {
+        // All registries loaded — build the graph
+        buildGraphFromRegistries(_regData);
+        activeFilters.clear();
+        buildFilters();
+        buildLegend();
+        document.getElementById("loading-overlay").style.display = "none";
+        init2D();
+        updateStats();
+      }
+
+    } else if (msg.type === "event" && msg.event?.event_type === "state_changed") {
+      const ed = msg.event.data;
+      if (ed.new_state) {
+        liveStates[ed.entity_id] = ed.new_state;
+        refreshNodeColors();
+        flashNode(ed.entity_id);
+        const panel = document.getElementById("side-panel");
+        if (panel.classList.contains("open")) {
+          const titleEl = document.getElementById("panel-title");
+          if (titleEl && titleEl.dataset.nodeId === ed.entity_id) {
+            const n = graphNodes.find(x => x.id === ed.entity_id);
+            if (n) openPanel(n);
+          }
+        }
+      }
+    }
+  };
+}
+
+// ══════════════════════════════════════════════════════════
+//  GRAPH DATA PREP
+// ══════════════════════════════════════════════════════════
+let activeFilters = new Set();
+let searchQuery = "";
+let currentView = "2d";
+
+function dimColor(hex, factor) {
+  // Blend hex color toward #1a1a2e (background) by factor (0=original, 1=background)
+  const r = parseInt(hex.slice(1,3),16), g = parseInt(hex.slice(3,5),16), b = parseInt(hex.slice(5,7),16);
+  const br=0x1a, bg=0x1a, bb=0x2e;
+  const nr=Math.round(r+(br-r)*factor), ng=Math.round(g+(bg-g)*factor), nb=Math.round(b+(bb-b)*factor);
+  return `#${nr.toString(16).padStart(2,'0')}${ng.toString(16).padStart(2,'0')}${nb.toString(16).padStart(2,'0')}`;
+}
+
+function getStateColor(node) {
+  const base = domainMeta(node.domain).color;
+  // Device-hub and structure nodes have no real entity state
+  if (node.type === "device" || node.type === "structure") return base;
+  const state = liveStates[node.id];
+  if (!state) return dimColor(base, 0.6);  // not yet loaded: dim
+  const s = state.state;
+  if (s === "on" || s === "home" || s === "armed_home" || s === "armed_away" || s === "playing" || s === "locked") return base;
+  if (s === "off" || s === "not_home" || s === "disarmed") return dimColor(base, 0.72); // off: strong dim but still hued
+  if (s === "unavailable") return "#444"; // unavailable: neutral dark
+  if (s === "unknown") return "#555";     // unknown: slightly lighter
+  // All other states (numeric sensors, heat_cool, cool, idle, etc.) = full color
+  return base;
+}
+
+function nodeRadius(node) {
+  if (node.r_override) return node.r_override;
+  if (node.type === "device") return 10;
+  if (node.domain === "automation" || node.domain === "scene" || node.domain === "script") return 9;
+  if (node.domain === "light") return 8;
+  return 6;
+}
+
+function buildGraphData() {
+  const visibleDomains = activeFilters.size > 0 ? activeFilters : null;
+  const q = searchQuery.toLowerCase();
+
+  const nodeMap = {};
+  graphNodes.forEach(n => {
+    const meta = domainMeta(n.domain);
+    const cat = n.type === "structure" ? "Structure" : n.type === "device" ? "Device" : meta.cat;
+    const isStructure = n.type === "structure";
+    // activeFilters = set of domains the user has HIDDEN (chip marked .off)
+    const visible = (isStructure || n.type === "device" || !activeFilters.has(n.domain)) &&
+      (!q || n.label.toLowerCase().includes(q) || n.id.toLowerCase().includes(q));
+    const spread = 200;
+    nodeMap[n.id] = {
+      ...n,
+      color: getStateColor(n),
+      r: nodeRadius(n),
+      cat,
+      visible,
+      x: n.x || (Math.random() - 0.5) * spread,
+      y: n.y || (Math.random() - 0.5) * spread,
+      z: n.z || (Math.random() - 0.5) * spread,
+    };
+  });
+
+  const nodes = Object.values(nodeMap).filter(n => n.visible);
+  const nodeIds = new Set(nodes.map(n => n.id));
+
+  const links = graphEdges
+    .filter(e => nodeIds.has(e.s) && nodeIds.has(e.t))
+    .map(e => ({ source: e.s, target: e.t, type: e.type }));
+
+  return { nodes, links };
+}
+
+function refreshNodeColors() {
+  // Update colors in-place — do NOT restart the simulation
+  if (currentView === "2d" && nodeSel) {
+    nodeSel.attr("fill", d => getStateColor(d));
+  }
+  if (currentView === "3d" && graph3d) {
+    graph3d.nodeColor(n => getStateColor(n));
+  }
+}
+
+function flashNode(entityId) {
+  if (currentView === "2d") {
+    d3.select(`[data-id="${entityId}"]`)
+      .transition().duration(100).attr("r", d => d.r * 2)
+      .transition().duration(400).attr("r", d => d.r);
+  }
+}
+
+// ══════════════════════════════════════════════════════════
+//  2D FORCE GRAPH (D3)
+// ══════════════════════════════════════════════════════════
+let sim2d, svg2d, linkSel, nodeSel, labelSel;
+let width2d = 0, height2d = 0;
+
+const EDGE_COLORS = {
+  belongs:   "#30363d",
+  group:     "#4fc3f7",
+  controls:  "#ef5350",
+  triggers:  "#3fb950",
+  reads:     "#8b949e",
+  structure: "#7e57c2",
+  area:      "#26a69a",
+  related:   "#9c27b0",
+};
+
+function init2D() {
+  const canvas = document.getElementById("graph-2d");
+  const rect = document.getElementById("canvas-area").getBoundingClientRect();
+  width2d = rect.width; height2d = rect.height;
+
+  svg2d = d3.select(canvas)
+    .attr("width", width2d).attr("height", height2d)
+    .call(d3.zoom().on("zoom", e => {
+      svg2d.select("g.root").attr("transform", e.transform);
+    }));
+
+  svg2d.select("g.root").remove();
+  const root = svg2d.append("g").attr("class","root");
+  root.append("g").attr("class","links");
+  root.append("g").attr("class","nodes");
+  root.append("g").attr("class","labels");
+
+  update2D();
+}
+
+function update2D() {
+  if (!svg2d) return;
+  const { nodes, links } = buildGraphData();
+
+  // Simulation
+  if (sim2d) sim2d.stop();
+  sim2d = d3.forceSimulation(nodes)
+    .alphaDecay(0.04)
+    .alphaMin(0.001)
+    .force("link", d3.forceLink(links).id(d => d.id).distance(d => {
+      if (d.type === "belongs") return 55;
+      if (d.type === "group") return 70;
+      return 120;
+    }).strength(d => d.type === "belongs" ? 0.8 : 0.3))
+    .force("charge", d3.forceManyBody().strength(-200))
+    .force("center", d3.forceCenter(width2d / 2, height2d / 2))
+    .force("collision", d3.forceCollide(d => d.r + 4));
+
+  const root = svg2d.select("g.root");
+
+  // Links
+  const linkG = root.select("g.links");
+  linkSel = linkG.selectAll("line").data(links, d => d.source.id + d.target.id);
+  linkSel.exit().remove();
+  linkSel = linkSel.enter().append("line")
+    .attr("stroke", d => EDGE_COLORS[d.type] || "#555")
+    .attr("stroke-opacity", d => d.type === "belongs" ? 0.25 : 0.6)
+    .attr("stroke-width", d => d.type === "belongs" ? 1 : 1.5)
+    .attr("stroke-dasharray", d => d.type === "reads" ? "4,3" : null)
+    .merge(linkSel);
+
+  // Nodes
+  const nodeG = root.select("g.nodes");
+  nodeSel = nodeG.selectAll("circle").data(nodes, d => d.id);
+  nodeSel.exit().remove();
+  const entered = nodeSel.enter().append("circle")
+    .attr("data-id", d => d.id)
+    .attr("r", d => d.r)
+    .attr("fill", d => getStateColor(d))
+    .attr("stroke", d => d.type === "device" ? "#8b949e" : "rgba(255,255,255,0.15)")
+    .attr("stroke-width", d => d.type === "device" ? 2 : 1)
+    .style("cursor", "pointer")
+    .call(d3.drag()
+      .on("start", (ev, d) => { if (!ev.active) sim2d.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
+      .on("drag",  (ev, d) => { d.fx = ev.x; d.fy = ev.y; })
+      .on("end",   (ev, d) => { if (!ev.active) sim2d.alphaTarget(0); d.fx = null; d.fy = null; }))
+    .on("mouseover", showTooltip)
+    .on("mousemove", moveTooltip)
+    .on("mouseout",  hideTooltip)
+    .on("click", (ev, d) => { ev.stopPropagation(); openPanel(d); });
+
+  nodeSel = entered.merge(nodeSel)
+    .attr("fill", d => getStateColor(d));
+
+  // Labels
+  const labelG = root.select("g.labels");
+  labelSel = labelG.selectAll("text").data(nodes.filter(n => n.type === "device" || n.type === "automation" || n.domain === "scene"), d => d.id);
+  labelSel.exit().remove();
+  labelSel = labelSel.enter().append("text")
+    .attr("font-size", 10)
+    .attr("fill", "#8b949e")
+    .attr("text-anchor", "middle")
+    .attr("pointer-events", "none")
+    .merge(labelSel)
+    .text(d => d.label);
+
+  sim2d.on("tick", () => {
+    linkSel.attr("x1",d=>d.source.x).attr("y1",d=>d.source.y)
+           .attr("x2",d=>d.target.x).attr("y2",d=>d.target.y);
+    nodeSel.attr("cx",d=>d.x).attr("cy",d=>d.y);
+    labelSel.attr("x",d=>d.x).attr("y",d=>d.y+d.r+12);
+  });
+}
+
+// ══════════════════════════════════════════════════════════
+//  3D FORCE GRAPH
+// ══════════════════════════════════════════════════════════
+let graph3d = null;
+
+function init3D() {
+  const container = document.getElementById("graph-3d");
+  container.innerHTML = "";
+  const { nodes, links } = buildGraphData();
+
+  graph3d = ForceGraph3D({ antialias: true, alpha: true })(container)
+    .backgroundColor("#0d1117")
+    .width(container.clientWidth)
+    .height(container.clientHeight)
+    .graphData({ nodes, links })
+    .nodeColor(n => getStateColor(n))
+    .nodeVal(n => n.r * n.r)
+    .nodeLabel(n => `${domainMeta(n.domain).icon} ${n.label}`)
+    .nodeThreeObject(n => {
+      const T = window.THREE;
+      const group = new T.Group();
+
+      // Sphere
+      const geo = new T.SphereGeometry(n.r, 16, 16);
+      const mat = new T.MeshBasicMaterial({ color: getStateColor(n), transparent: true, opacity: 0.92 });
+      group.add(new T.Mesh(geo, mat));
+
+      // Label — only on devices, automations, scenes
+      const showLabel = n.type === "structure" || n.type === "device" || n.type === "automation" || n.domain === "scene";
+      if (showLabel) {
+        const text = n.label;
+        const fontSize = n.type === "device" ? 28 : 24;
+        const canvas = document.createElement("canvas");
+        const ctx = canvas.getContext("2d");
+        ctx.font = `600 ${fontSize}px sans-serif`;
+        const tw = ctx.measureText(text).width;
+        canvas.width = tw + 20;
+        canvas.height = fontSize + 14;
+        ctx.font = `600 ${fontSize}px sans-serif`;
+        ctx.fillStyle = n.type === "device" ? "#e6edf3" : n.type === "automation" ? "#ff6b6b" : "#ff8c55";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(text, canvas.width / 2, canvas.height / 2);
+        const texture = new T.CanvasTexture(canvas);
+        const smat = new T.SpriteMaterial({ map: texture, transparent: true, depthWrite: false });
+        const sprite = new T.Sprite(smat);
+        const sh = n.type === "device" ? 22 : 18;
+        const sw = sh * canvas.width / canvas.height;
+        sprite.scale.set(sw, sh, 1);
+        sprite.position.y = n.r + sh * 0.6;
+        group.add(sprite);
+      }
+      return group;
+    })
+    .linkColor(l => EDGE_COLORS[l.type] || "#555")
+    .linkOpacity(0.5)
+    .linkWidth(l => l.type === "belongs" ? 0.5 : 1.5)
+    .linkDirectionalParticles(l => l.type === "controls" || l.type === "triggers" ? 2 : 0)
+    .linkDirectionalParticleSpeed(0.006)
+    .onNodeClick(n => openPanel(n))
+    .onNodeHover(n => { container.style.cursor = n ? "pointer" : "default"; });
+
+  // Configure the existing 3D-aware forces — never replace with d3.force* (2D only)
+  graph3d.d3Force('charge').strength(-500);
+  graph3d.d3Force('link').distance(d => {
+    if (d.type === "structure") return 120;
+    if (d.type === "area")     return 80;
+    if (d.type === "belongs")  return 40;
+    if (d.type === "group")    return 60;
+    return 120;
+  });
+
+  // Start at an angled view so it never looks flat
+  graph3d.cameraPosition({ x: 250, y: 180, z: 450 }, { x: 0, y: 0, z: 0 }, 0);
+  // Animate to a slightly different angle after settling
+  setTimeout(() => graph3d.cameraPosition({ x: 150, y: 100, z: 550 }, { x: 0, y: 0, z: 0 }, 2000), 4000);
+}
+
+// ══════════════════════════════════════════════════════════
+//  VIEW SWITCHING
+// ══════════════════════════════════════════════════════════
+function switchView(v) {
+  currentView = v;
+  document.getElementById("graph-2d").style.display = v === "2d" ? "block" : "none";
+  document.getElementById("graph-3d").style.display = v === "3d" ? "block" : "none";
+  document.getElementById("btn-2d").className = v === "2d" ? "active" : "";
+  document.getElementById("btn-3d").className = v === "3d" ? "active" : "";
+  if (v === "3d" && !graph3d) init3D();
+  if (v === "3d" && graph3d) {
+    const { nodes, links } = buildGraphData();
+    graph3d.graphData({ nodes, links });
+  }
+}
+
+// ══════════════════════════════════════════════════════════
+//  TOOLTIP
+// ══════════════════════════════════════════════════════════
+function showTooltip(event, d) {
+  const tt = document.getElementById("tooltip");
+  const state = liveStates[d.id];
+  const meta = domainMeta(d.domain);
+  const stateStr = state ? state.state : "—";
+  const attrs = state ? state.attributes : {};
+  let extra = "";
+  if (attrs.brightness !== undefined) extra += `<div class="tt-row">Brightness: <span>${Math.round(attrs.brightness/2.55)}%</span></div>`;
+  if (attrs.temperature !== undefined) extra += `<div class="tt-row">Temp: <span>${attrs.temperature}°</span></div>`;
+  if (attrs.current_temperature !== undefined) extra += `<div class="tt-row">Curr Temp: <span>${attrs.current_temperature}°F</span></div>`;
+  const stateBg = stateStr === "on" ? "#1e3a2f" : stateStr === "off" ? "#1c1c1e" : "#21262d";
+  const stateCol = stateStr === "on" ? "#3fb950" : stateStr === "off" ? "#6e7681" : "#8b949e";
+  tt.innerHTML = `
+    <div class="tt-title">${meta.icon} ${d.label}</div>
+    <div class="tt-row">ID: <span style="font-family:monospace;font-size:11px">${d.id}</span></div>
+    <div class="tt-row">Domain: <span>${d.domain}</span></div>
+    ${extra}
+    <div class="tt-state" style="background:${stateBg};color:${stateCol}">${stateStr}</div>
+  `;
+  tt.style.display = "block";
+  moveTooltip(event);
+}
+function moveTooltip(event) {
+  const tt = document.getElementById("tooltip");
+  const ca = document.getElementById("canvas-area").getBoundingClientRect();
+  let x = event.clientX - ca.left + 14;
+  let y = event.clientY - ca.top - 10;
+  if (x + 300 > ca.width) x = event.clientX - ca.left - 300;
+  tt.style.left = x + "px";
+  tt.style.top  = y + "px";
+}
+function hideTooltip() { document.getElementById("tooltip").style.display = "none"; }
+
+// ══════════════════════════════════════════════════════════
+//  SIDE PANEL
+// ══════════════════════════════════════════════════════════
+function buildControlsHtml(d, state) {
+  const dom = d.domain;
+  const s = state ? state.state : null;
+  const attrs = state ? (state.attributes || {}) : {};
+  const isOn = s === "on" || s === "home";
+  const parts = [];
+
+  if (dom === "light" || dom === "switch" || dom === "fan") {
+    parts.push(`
+      <div style="display:flex;gap:8px;margin-bottom:8px">
+        <button class="ctrl-btn${isOn ? "" : " active"}" onclick="callService('${dom}','turn_off','${d.id}',{})">Off</button>
+        <button class="ctrl-btn${isOn ? " active" : ""}" onclick="callService('${dom}','turn_on','${d.id}',{})">On</button>
+      </div>`);
+    if (dom === "light" && attrs.brightness !== undefined) {
+      const pct = Math.round(attrs.brightness / 2.55);
+      parts.push(`
+        <div style="margin-bottom:8px">
+          <label style="font-size:11px;color:var(--muted)">Brightness: <span id="bri-val">${pct}%</span></label>
+          <input type="range" min="1" max="100" value="${pct}" style="width:100%;margin-top:4px;accent-color:var(--accent)"
+            oninput="document.getElementById('bri-val').textContent=this.value+'%'"
+            onchange="callService('light','turn_on','${d.id}',{brightness_pct:+this.value})">
+        </div>`);
+    }
+    if (dom === "light" && attrs.color_temp_kelvin !== undefined) {
+      const minK = attrs.min_color_temp_kelvin || 2000;
+      const maxK = attrs.max_color_temp_kelvin || 6500;
+      parts.push(`
+        <div style="margin-bottom:8px">
+          <label style="font-size:11px;color:var(--muted)">Color temp: <span id="ct-val">${attrs.color_temp_kelvin}K</span></label>
+          <input type="range" min="${minK}" max="${maxK}" value="${attrs.color_temp_kelvin}" style="width:100%;margin-top:4px;accent-color:var(--accent)"
+            oninput="document.getElementById('ct-val').textContent=this.value+'K'"
+            onchange="callService('light','turn_on','${d.id}',{color_temp_kelvin:+this.value})">
+        </div>`);
+    }
+  } else if (dom === "scene") {
+    parts.push(`<button class="ctrl-btn active" onclick="callService('scene','turn_on','${d.id}',{})">Activate Scene</button>`);
+  } else if (dom === "script") {
+    parts.push(`<button class="ctrl-btn active" onclick="callService('script','turn_on','${d.id}',{})">Run Script</button>`);
+  } else if (dom === "automation") {
+    parts.push(`
+      <div style="display:flex;gap:8px;margin-bottom:8px">
+        <button class="ctrl-btn${isOn ? "" : " active"}" onclick="callService('automation','turn_off','${d.id}',{})">Disable</button>
+        <button class="ctrl-btn${isOn ? " active" : ""}" onclick="callService('automation','turn_on','${d.id}',{})">Enable</button>
+        <button class="ctrl-btn" onclick="callService('automation','trigger','${d.id}',{})">▶ Trigger</button>
+      </div>`);
+  } else if (dom === "media_player") {
+    parts.push(`
+      <div style="display:flex;gap:8px;margin-bottom:8px">
+        <button class="ctrl-btn" onclick="callService('media_player','media_previous_track','${d.id}',{})">⏮</button>
+        <button class="ctrl-btn" onclick="callService('media_player','media_play_pause','${d.id}',{})">⏯</button>
+        <button class="ctrl-btn" onclick="callService('media_player','media_next_track','${d.id}',{})">⏭</button>
+        <button class="ctrl-btn" onclick="callService('media_player','turn_off','${d.id}',{})">⏻</button>
+      </div>`);
+    if (attrs.volume_level !== undefined) {
+      const vol = Math.round(attrs.volume_level * 100);
+      parts.push(`
+        <div style="margin-bottom:8px">
+          <label style="font-size:11px;color:var(--muted)">Volume: <span id="vol-val">${vol}%</span></label>
+          <input type="range" min="0" max="100" value="${vol}" style="width:100%;margin-top:4px;accent-color:var(--accent)"
+            oninput="document.getElementById('vol-val').textContent=this.value+'%'"
+            onchange="callService('media_player','volume_set','${d.id}',{volume_level:this.value/100})">
+        </div>`);
+    }
+  } else if (dom === "climate") {
+    const hvac = attrs.hvac_mode || s;
+    const curTemp = attrs.current_temperature;
+    const setTemp = attrs.temperature;
+    const heatSet = attrs.target_temp_low;
+    const coolSet = attrs.target_temp_high;
+    parts.push(`<div style="font-size:11px;color:var(--muted);margin-bottom:6px">Mode: ${hvac}${curTemp !== undefined ? " · Current: "+curTemp+"°" : ""}${setTemp !== undefined ? " · Set: "+setTemp+"°" : ""}${heatSet !== undefined ? " · Heat: "+heatSet+"° Cool: "+coolSet+"°" : ""}</div>`);
+    const modes = attrs.hvac_modes || [];
+    if (modes.length) {
+      parts.push(`<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px">${modes.map(m =>
+        `<button class="ctrl-btn${hvac===m?" active":""}" onclick="callService('climate','set_hvac_mode','${d.id}',{hvac_mode:'${m}'})">${m}</button>`
+      ).join("")}</div>`);
+    }
+    const presets = attrs.preset_modes || [];
+    if (presets.length) {
+      const cur = attrs.preset_mode;
+      parts.push(`<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px">${presets.map(p =>
+        `<button class="ctrl-btn${cur===p?" active":""}" onclick="callService('climate','set_preset_mode','${d.id}',{preset_mode:'${p}'})">${p}</button>`
+      ).join("")}</div>`);
+    }
+  } else if (dom === "input_boolean") {
+    parts.push(`
+      <div style="display:flex;gap:8px;margin-bottom:8px">
+        <button class="ctrl-btn${isOn ? "" : " active"}" onclick="callService('input_boolean','turn_off','${d.id}',{})">Off</button>
+        <button class="ctrl-btn${isOn ? " active" : ""}" onclick="callService('input_boolean','turn_on','${d.id}',{})">On</button>
+      </div>`);
+  }
+
+  return parts.length ? `<div style="margin:10px 0 6px 0">${parts.join("")}</div>` : "";
+}
+
+function openPanel(d) {
+  const state = liveStates[d.id];
+  const meta = domainMeta(d.domain);
+  const connections = graphEdges
+    .filter(e => e.s === d.id || e.t === d.id)
+    .map(e => ({ id: e.s === d.id ? e.t : e.s, role: e.s === d.id ? "→ " + e.type : e.type + " →" }));
+
+  let attrsHtml = "";
+  if (state && state.attributes) {
+    const interesting = ["friendly_name","brightness","color_temp_kelvin","temperature","humidity","current_temperature",
+                         "hvac_mode","preset_mode","media_title","source","device_class","volume_level"];
+    interesting.forEach(k => {
+      if (state.attributes[k] !== undefined) {
+        let val = state.attributes[k];
+        if (k === "brightness") val = Math.round(val/2.55) + "%";
+        if (k === "volume_level") val = Math.round(val*100) + "%";
+        attrsHtml += `<div class="detail-row"><div class="detail-label">${k}</div><div class="detail-val">${val}</div></div>`;
+      }
+    });
+  }
+
+  const connHtml = connections.length ? `
+    <div class="connected-list">
+      <h4>Connections (${connections.length})</h4>
+      ${connections.slice(0,15).map(c => {
+        const cn = graphNodes.find(n => n.id === c.id);
+        const cm = domainMeta(cn ? cn.domain : "");
+        return `<div class="conn-item" onclick="openPanelById('${c.id}')">${cm.icon} ${cn ? cn.label : c.id} <span style="color:var(--muted);font-size:10px">${c.role}</span></div>`;
+      }).join("")}
+    </div>` : "";
+
+  const ctrlHtml = buildControlsHtml(d, state);
+  const stateLabel = (d.type === "device" || d.type === "structure") ? "—"
+                   : state ? state.state
+                   : (wsConnected ? "unknown" : "offline");
+
+  const titleEl = document.getElementById("panel-title");
+  titleEl.textContent = `${meta.icon} ${d.label}`;
+  titleEl.dataset.nodeId = d.id;
+
+  document.getElementById("panel-content").innerHTML = `
+    <div class="detail-row"><div class="detail-label">Entity ID</div><div class="detail-val" style="font-family:monospace;font-size:11px">${d.id}</div></div>
+    <div class="detail-row"><div class="detail-label">Domain</div><div class="detail-val">${d.domain}</div></div>
+    <div class="detail-row"><div class="detail-label">State</div><div class="detail-val">${stateLabel}</div></div>
+    ${attrsHtml}
+    ${ctrlHtml}
+    ${connHtml}
+    <div style="margin-top:14px">
+      <a href="${HA_URL}/config/entities?historyBack=1&entity_id=${d.id}" target="_blank"
+         style="color:var(--accent);font-size:12px;text-decoration:none">Open in HA →</a>
+    </div>
+  `;
+  document.getElementById("side-panel").classList.add("open");
+}
+
+function openPanelById(id) {
+  const node = graphNodes.find(n => n.id === id);
+  if (node) openPanel(node);
+}
+function closePanel() { document.getElementById("side-panel").classList.remove("open"); }
+
+// ══════════════════════════════════════════════════════════
+//  FILTERS  (built dynamically from actual graph domains)
+// ══════════════════════════════════════════════════════════
+const DOMAIN_ORDER = [
+  'light','switch','climate','binary_sensor','sensor','automation',
+  'scene','script','media_player','fan','cover','lock',
+  'alarm_control_panel','input_boolean','notify','event','device_tracker'
+];
+
+function buildFilters() {
+  const wrap = document.getElementById("filters");
+  const existing = wrap.querySelector("#search-wrap");
+  [...wrap.querySelectorAll(".filter-chip")].forEach(c => c.remove());
+
+  // Count entities per domain (skip structural/device nodes)
+  const counts = {};
+  graphNodes.forEach(n => {
+    if (n.type === "structure" || n.type === "device") return;
+    counts[n.domain] = (counts[n.domain] || 0) + 1;
+  });
+
+  // Sort by preferred order, then alphabetically for anything else
+  const domains = [
+    ...DOMAIN_ORDER.filter(d => counts[d]),
+    ...Object.keys(counts).filter(d => !DOMAIN_ORDER.includes(d)).sort()
+  ];
+
+  domains.forEach(domain => {
+    const meta = domainMeta(domain);
+    const label = domain.replace(/_/g, ' ');
+    const chip = document.createElement("div");
+    chip.className = "filter-chip";
+    chip.dataset.domain = domain;
+    chip.style.background = meta.color + "22";
+    chip.style.borderColor = meta.color + "55";
+    chip.style.color = meta.color;
+    chip.innerHTML = `<span class="dot" style="background:${meta.color}"></span>${label} <span style="opacity:.5">${counts[domain]}</span>`;
+    chip.onclick = () => toggleFilter(domain, chip);
+    wrap.insertBefore(chip, existing);
+  });
+}
+
+function toggleFilter(domain, chip) {
+  if (activeFilters.has(domain)) {
+    activeFilters.delete(domain);
+    chip.classList.remove("off");
+  } else {
+    activeFilters.add(domain);
+    chip.classList.add("off");
+  }
+  if (currentView === "2d") update2D();
+  if (currentView === "3d" && graph3d) {
+    const { nodes, links } = buildGraphData();
+    graph3d.graphData({ nodes, links });
+  }
+}
+
+function filterBySearch(q) {
+  searchQuery = q;
+  if (currentView === "2d") update2D();
+  if (currentView === "3d" && graph3d) {
+    const { nodes, links } = buildGraphData();
+    graph3d.graphData({ nodes, links });
+  }
+}
+
+// ══════════════════════════════════════════════════════════
+//  LEGEND
+// ══════════════════════════════════════════════════════════
+function buildLegend() {
+  const leg = document.getElementById("legend");
+  const edgeLegend = Object.entries(EDGE_COLORS).map(([type, color]) =>
+    `<div class="leg-row"><div class="leg-line" style="background:${color}${type==="reads"?";background:repeating-linear-gradient(90deg,"+color+" 0,"+color+" 4px,transparent 4px,transparent 7px)":""}"></div>${type}</div>`
+  ).join("");
+
+  leg.innerHTML = `
+    <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Edge Types</div>
+    ${edgeLegend}
+    <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin:8px 0 6px">Node size = importance</div>
+    <div class="leg-row"><div class="leg-dot" style="background:#18bcf2;width:18px;height:18px"></div>Home Assistant</div>
+    <div class="leg-row"><div class="leg-dot" style="background:#7e57c2;width:14px;height:14px"></div>Residence / Floor / Area</div>
+    <div class="leg-row"><div class="leg-dot" style="background:#546e7a;width:12px;height:12px"></div>Device hub</div>
+    <div class="leg-row"><div class="leg-dot" style="background:#ef5350;width:10px;height:10px"></div>Automation</div>
+    <div class="leg-row"><div class="leg-dot" style="background:#8b949e;width:7px;height:7px"></div>Entity</div>
+    <div class="leg-row"><div class="leg-dot" style="background:#66bb6a;width:10px;height:10px"></div>Outdoor area</div>
+  `;
+}
+
+// ══════════════════════════════════════════════════════════
+//  STATS
+// ══════════════════════════════════════════════════════════
+function updateStats() {
+  const { nodes, links } = buildGraphData();
+  document.getElementById("node-count").textContent = nodes.length + " nodes";
+  document.getElementById("edge-count").textContent = links.length + " edges";
+  const on = nodes.filter(n => liveStates[n.id]?.state === "on").length;
+  document.getElementById("stats").textContent =
+    `${nodes.length} nodes · ${links.length} edges · ${on} entities on`;
+}
+
+setInterval(updateStats, 3000);
+
+// ══════════════════════════════════════════════════════════
+//  RESIZE
+// ══════════════════════════════════════════════════════════
+window.addEventListener("resize", () => {
+  if (currentView === "2d") init2D();
+  if (currentView === "3d" && graph3d) {
+    const c = document.getElementById("graph-3d");
+    graph3d.width(c.clientWidth).height(c.clientHeight);
+  }
+});
+
+// ══════════════════════════════════════════════════════════
+//  BOOT
+// ══════════════════════════════════════════════════════════
+// Graph init is deferred — connectWS loads all registries first,
+// then fires buildGraphFromRegistries → buildFilters → buildLegend → init2D.
+(function boot() {
+  connectWS();
+})();
+</script>
+</body>
+</html>
